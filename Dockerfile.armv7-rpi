@@ -1,0 +1,56 @@
+FROM angeloavv/rpi-zoneminder:latest AS ffmpeg
+LABEL maintainer="zhangjc12345@gmail.com"
+
+ARG FFMPEG_VERSION=4.1.6
+
+RUN echo "Building FFMPEG (${FFMPEG_VERSION})"
+
+# Setup
+RUN DEBIAN_FRONTEND=noninteractive apt-get -qq update
+RUN DEBIAN_FRONTEND=noninteractive apt-get -y -qq install build-essential cmake cmake-data curl git libomxil-bellagio-dev libx264-dev pkg-config sudo xz-utils
+
+# Build rpi userland
+WORKDIR "/root"
+#RUN git clone --depth 1 https://github.com/raspberrypi/userland.git
+COPY userland /root/userland
+WORKDIR "/root/userland"
+RUN ./buildme
+
+# Required to link deps
+RUN echo "/opt/vc/lib" > /etc/ld.so.conf.d/00-vmcs.conf
+RUN ldconfig
+
+# Build FFMPEG
+RUN curl https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz -o ffmpeg.tar.xz
+#COPY ffmpeg-${FFMPEG_VERSION}.tar.xz ./ffmpeg.tar.xz
+RUN tar xf ffmpeg.tar.xz
+WORKDIR "${FFMPEG_VERSION}"
+RUN PKG_CONFIG_PATH=/opt/vc/lib/pkgconfig ./configure --arch=armel --target-os=linux \
+	--enable-gpl --enable-omx --enable-omx-rpi --enable-nonfree --enable-mmal --enable-shared
+RUN make -j4
+
+RUN ln -s `pwd`/ffmpeg /usr/local/bin/ffmpeg && \
+    mv /root/userland/ffmpeg-${FFMPEG_VERSION}/libavcodec/libavcodec.so.58 /root/userland/ffmpeg-${FFMPEG_VERSION}/libavcodec/libavcodec.so.58.35.100 && \
+    mv /root/userland/ffmpeg-${FFMPEG_VERSION}/libavformat/libavformat.so.58 /root/userland/ffmpeg-${FFMPEG_VERSION}/libavformat/libavformat.so.58.20.100 && \
+    mv /root/userland/ffmpeg-${FFMPEG_VERSION}/libavfilter/libavfilter.so.7 /root/userland/ffmpeg-${FFMPEG_VERSION}/libavfilter/libavfilter.so.7.40.101 && \
+    mv /root/userland/ffmpeg-${FFMPEG_VERSION}/libavdevice/libavdevice.so.58 /root/userland/ffmpeg-${FFMPEG_VERSION}/libavdevice/libavdevice.so.58.5.100 && \
+    mv /root/userland/ffmpeg-${FFMPEG_VERSION}/libavutil/libavutil.so.56 /root/userland/ffmpeg-${FFMPEG_VERSION}/libavutil/libavutil.so.56.22.100
+
+WORKDIR "/root"
+
+FROM angeloavv/rpi-zoneminder:latest
+
+RUN usermod -aG video www-data
+#RUN apt remove -y ffmpeg
+COPY --from=ffmpeg /root/userland/ffmpeg-${FFMPEG_VERSION}/ffmpeg /usr/bin/ffmpeg
+COPY --from=ffmpeg /opt/vc /opt/vc
+COPY --from=ffmpeg /root/userland/ffmpeg-${FFMPEG_VERSION}/libavcodec/libavcodec.so.58.35.100 \
+                   /root/userland/ffmpeg-${FFMPEG_VERSION}/libavformat/libavformat.so.58.20.100 \
+                   /root/userland/ffmpeg-${FFMPEG_VERSION}/libavfilter/libavfilter.so.7.40.101 \
+                   /root/userland/ffmpeg-${FFMPEG_VERSION}/libavdevice/libavdevice.so.58.5.100 \
+                   /root/userland/ffmpeg-${FFMPEG_VERSION}/libavutil/libavutil.so.56.22.100 \
+                   /usr/lib/arm-linux-gnueabihf/
+
+# Required to link deps
+RUN echo "/opt/vc/lib" > /etc/ld.so.conf.d/00-vmcs.conf
+RUN ldconfig
